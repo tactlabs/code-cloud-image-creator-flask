@@ -1,0 +1,2879 @@
+package org.qwan.tact.controller;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.sql.SQLException;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+
+import javax.annotation.Resource;
+import javax.mail.Message;
+import javax.mail.MessagingException;
+import javax.mail.Session;
+import javax.mail.Transport;
+import javax.mail.internet.InternetAddress;
+import javax.mail.internet.MimeMessage;
+import javax.servlet.http.HttpServletRequest;
+import javax.servlet.http.HttpServletResponse;
+
+import org.apache.commons.io.IOUtils;
+import org.apache.ibatis.session.SqlSession;
+import org.apache.velocity.app.VelocityEngine;
+import org.joda.time.LocalDate;
+import org.jsoup.Jsoup;
+import org.qwan.tact.auth.AuthSpecialTact;
+import org.qwan.tact.auth.TactAuthException;
+import org.qwan.tact.auth.resolver.ArticleTypeArgument;
+import org.qwan.tact.auth.resolver.CheckAndEncryptedPwdArgument;
+import org.qwan.tact.auth.resolver.DecryptedUseridArgument;
+import org.qwan.tact.auth.resolver.EncryptedPwdArgument;
+import org.qwan.tact.auth.resolver.IpAddressArgument;
+import org.qwan.tact.core.TactUtil;
+import org.qwan.tact.core.TactWebUtil;
+import org.qwan.tact.domain.LoginUser;
+import org.qwan.tact.domain.OSDetails;
+import org.qwan.tact.email.AsyncMailSender;
+import org.qwan.tact.ext.services.TactRestClient;
+import org.qwan.tact.gateway.GatewayConst;
+import org.qwan.tact.gateway.aop.APIKeyRequired;
+import org.qwan.tact.gateway.aop.APIKeyRequired.KeyType;
+import org.qwan.tact.gateway.aop.AttemptCounter;
+import org.qwan.tact.gateway.aop.CheckService;
+import org.qwan.tact.gateway.aop.CheckService.ServiceType;
+import org.qwan.tact.gateway.aop.Gender;
+import org.qwan.tact.gateway.aop.LoginErrorReason;
+import org.qwan.tact.gateway.aop.LoginRequired;
+import org.qwan.tact.gateway.aop.RCLoginRequired;
+import org.qwan.tact.gateway.aop.TokenRequired;
+import org.qwan.tact.gateway.aop.TokenRequired.TokenType;
+import org.qwan.tact.gateway.aop.ViewArchive;
+import org.qwan.tact.json.model.StackQuestion;
+import org.qwan.tact.json.model.TactOS;
+import org.qwan.tact.repository.RegionCoachMapper;
+import org.qwan.tact.repository.TestMapper;
+import org.qwan.tact.response.util.RespUtil;
+import org.qwan.tact.response.util.TactAPIResult;
+import org.qwan.tact.scheduler.StackKeyMeterScheduler;
+import org.qwan.tact.service.CandidateManager;
+import org.qwan.tact.service.RegionCoachService;
+import org.qwan.tact.service.RockstarService;
+import org.qwan.tact.service.SocialFeedService;
+import org.qwan.tact.service.TactGeneralService;
+import org.qwan.tact.service.TestService;
+import org.qwan.tact.service.impl.EmailService;
+import org.qwan.tact.util.ExcelUtil;
+import org.qwan.tact.util.FileUtil;
+import org.qwan.tact.util.GeoLocationFinderTact;
+import org.qwan.tact.util.HttpRequestUtilTact;
+import org.qwan.tact.util.IndeedJobReader;
+import org.qwan.tact.util.NetUtilsTact;
+import org.qwan.tact.util.PDFUtil;
+import org.qwan.tact.util.PropertyUtilTact;
+import org.qwan.tact.util.RandomQwan;
+import org.qwan.tact.util.StackTagWeeklyAnalyzer;
+import org.qwan.tact.util.TactDateTimeUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.ui.Model;
+import org.springframework.ui.velocity.VelocityEngineUtils;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestMethod;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.servlet.ModelAndView;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.itextpdf.text.DocumentException;
+import com.maxmind.geoip.Location;
+
+
+@RestController
+@RequestMapping("/test")
+@SuppressWarnings("unchecked")
+public class TestController {
+	
+	@Autowired
+	CandidateManager manager;
+
+	@Autowired
+	TactGeneralService tactGeneralService;
+
+	@Autowired
+	RockstarService rockstarService;
+
+	@Autowired
+	private AsyncMailSender asyncMailSender;
+	
+	@Autowired
+	private IndeedJobReader indeedJobReader;
+
+	@Autowired
+	private SqlSession appSqlSession;
+	
+	@Autowired
+	private SqlSession publicSqlSession;
+
+	@Autowired
+	private TactRestClient restClient;
+
+	@Autowired
+	private EmailService emailService;
+	
+	@Autowired
+	private RegionCoachService tactRegionCoachService;
+
+	//@Autowired
+	//private RockstarJPAService rockstarJPAService;
+
+	//@Resource
+	//FeedJPAService feedJPAService;
+
+	//@Resource
+	//TestJPAService testJPAService;
+
+	@Resource
+	TestService testService;
+	
+	@Autowired
+	private AuthSpecialTact authSpecialTact;
+	
+	@Autowired
+	private StackTagWeeklyAnalyzer stackTagWeeklyAnalyzer;
+
+	@Autowired
+	private SocialFeedService socialFeedService;
+
+	private static Logger _log = LoggerFactory.getLogger(TestController.class);
+
+	@Autowired
+	private VelocityEngine velocityEngine;
+
+	@Value("${region.city}")
+	private String regionCity;
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws SQLException
+	 * 
+	 * possible urls: 
+	 * 		/test/region/city
+	 * 		http://localhost:8035/tactbase/test/region/city
+	 * 		http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@RequestMapping(value = "/region/city", method = { RequestMethod.POST,
+			RequestMethod.GET })
+	public <T> T regionCity(HttpServletRequest request,
+			HttpServletResponse response) {
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("city", regionCity);
+
+		return (T) RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param username
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/username/validator
+	 * 		/tactbase/test/username/validator
+	 *      http://localhost:8035/tactbase/test/username/validator
+	 *      http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/username/validator")
+	public <T> T testUsernameValidator(
+			@RequestParam(value = "email", defaultValue = "fuck") String username) {
+		return tactGeneralService.testUsernameValidator(username);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param key
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/tech/key/validator
+	 * 		/tactbase/test/tech/key/validator
+	 *      http://localhost:8035/tactbase/test/tech/key/validator
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/tech/key/validator")
+	public <T> T testTechKey(
+			@RequestParam(value = "key", defaultValue = "inner-classes") String key) {
+		return tactGeneralService.testTechKeyValidator(key);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/env 
+	 * 		/tactbase/test/env
+	 * 		http://localhost:8035/tactbase/test/env
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/env")
+	public <T> T getEnv(HttpServletRequest request,
+			HttpServletResponse response) {
+		String env = request.getSession().getServletContext()
+				.getInitParameter("env");
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("env", env);
+		resultMap.put("ok", "ok");
+
+		_log.info(" obj : "+resultMap);
+		return (T) resultMap;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/os 
+	 * 		http://localhost:8035/tactbase/test
+	 * 		http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "")
+	public <T> T test() {
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("version", "1.1");
+
+		_log.info(" obj : " + resultMap);
+		return (T) resultMap;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/test123 
+	 * 		http://localhost:8035/tactbase/test/test123
+	 * 		http://devapi.talentaccurate.com/test/test123
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "test123")
+	public <T> T test123() {
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("version", "1.3");
+
+		_log.info(" obj : " + resultMap);
+		return (T) resultMap;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/os 
+	 * 		http://localhost:8035/tactbase/test/os
+	 * 		http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/os")
+	public <T> T testOsLoader() {
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("os_type", OSDetails.getInstance().getOsType());
+		//resultMap.put("upload_base", OSDetails.getInstance().getOsUploadBase());
+
+		_log.info(" obj : " + resultMap);
+		return (T) resultMap;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 */
+	//@formatter:on
+	@GetMapping(value = "/maz")
+	public <T> T testMazLoader() {
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "maz");
+		resultMap.put("os_type", "Default os ");
+		resultMap.put("upload_base", "Upload base");
+
+		_log.info(" obj : " + resultMap);
+		return (T) resultMap;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param id
+	 * @return
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/employee/{empolyeeId}/details")
+	//@RequestParam(value = "name") String name){
+	public <T> T testEmployeeDetailsLoader(@PathVariable("empolyeeId") int id){
+
+		return (T) testService.employeeDetails(id);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param id
+	 * @return
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/test/{empolyeeId}/details")
+	//@RequestParam(value = "name") String name){
+	public <T> T testDetailsLoader(@PathVariable("empolyeeId") int id){
+
+		return (T) testService.getTestDetailsById(id);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param c1
+	 * @param c2
+	 * @return
+	 */
+	//@formatter:on
+	@GetMapping(value = "/compare/content")	
+	public <T> T testComparisionLoader(/*@PathVariable("c1") String c1, @PathVariable("c2") String c2*/
+		@RequestParam(value = "content1") String c1,@RequestParam(value = "content2") String c2){
+		return (T) testService.getSimilarity(c1,c2);		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param model
+	 * @return
+	 * 
+	 *         Note: not working as mvc configuration is not there
+	 */
+	//@formatter:on
+	@GetMapping(value = "/os/mvc")
+	public ModelAndView testOsLoaderMVC(Model model) {
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("os_type", OSDetails.getInstance().getOsType());
+		resultMap.put("upload_base", OSDetails.getInstance().getOsUploadBase());
+
+		_log.info(" obj : " + resultMap);
+
+		ModelAndView mv = new ModelAndView("user");
+
+		return mv;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param name
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/missing/param
+	 *      http://localhost:8035/tactbase/test/missing/param
+	 *      http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/missing/param")
+	public <T> T testMissingParam(
+			@RequestParam(value = "name") String name) {
+		return (T) RespUtil.successResponse();
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/login/required/aop
+	 *      http://localhost:8035/tactbase/test/login/required/aop
+	 *      http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@LoginRequired
+	@GetMapping(value = "/login/required/aop")
+	public <T> T testLoginAOP() {
+		return (T) RespUtil.successResponse();
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/email
+	 *      http://localhost:8035/tactbase/test/email
+	 *      http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/email")
+	public <T> T testEmail() {
+		asyncMailSender.sendConfirmationLetter("raja.r.csp@gmail.com", "test");
+		return (T) RespUtil.successResponse();
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param ip
+	 * @return
+	 * @throws TactAuthException
+	 * 
+	 * possible urls: 
+	 * 		/test/ip
+	 *      http://localhost:8035/tactbase/test/ip
+	 *      http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/ip")
+	public <T> T testIP(
+			@RequestParam(value = "name", defaultValue = "1.0.3.125") String ip)
+			throws TactAuthException {
+
+		TestMapper tactMapper = appSqlSession.getMapper(TestMapper.class);
+		String country = tactMapper.getCountryFromIP(NetUtilsTact.ipToLong(ip)
+				+ "");
+
+		Map<String, Object> countryMap = new LinkedHashMap<String, Object>();
+		countryMap.put("country", country);
+
+		return (T) RespUtil.successResponse(countryMap);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param ip
+	 * @return
+	 * @throws TactAuthException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/plain/ip
+	 * 		http://localhost:8035/tactbase/test/get/plain/ip
+	 * 		http://devapi.talentaccurate.com/
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/plain/ip")
+	public <T> T getIP(
+			HttpServletRequest request,
+			HttpServletResponse response)
+			throws TactAuthException {
+		
+		return (T) HttpRequestUtilTact.getRemoteIPDetails(request);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param ip
+	 * @return
+	 * @throws TactAuthException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/ip 
+	 * 		/tactbase/test/get/ip
+	 *      http://localhost:8035/tactbase/test/get/ip
+	 *      http://devapi.talentaccurate.com/	
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/ip")
+	public <T> T getIP(HttpServletRequest request)
+			throws TactAuthException {
+		TestMapper tactMapper = appSqlSession.getMapper(TestMapper.class);
+		
+		String ipAddress = getClientIpAddr(request);		
+		Long ipLong = NetUtilsTact.ipToLong(ipAddress);		
+		String country = tactMapper.getCountryFromIP(""+ipLong);
+		
+		Map<String, Object> countryMap = new LinkedHashMap<String, Object>();
+		countryMap.put("ip", ipAddress);
+		countryMap.put("ip_long", ipLong);
+		countryMap.put("country", country);
+
+		return (T) RespUtil.successResponse(countryMap);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @return
+	 */
+	//@formatter:on
+	public static String getClientIpAddr(HttpServletRequest request) {
+		String ip = request.getHeader("X-Forwarded-For");
+		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+			ip = request.getHeader("Proxy-Client-IP");
+		}
+		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+			ip = request.getHeader("WL-Proxy-Client-IP");
+		}
+		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+			ip = request.getHeader("HTTP_CLIENT_IP");
+		}
+		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+			ip = request.getHeader("HTTP_X_FORWARDED_FOR");
+		}
+		if (ip == null || ip.length() == 0 || "unknown".equalsIgnoreCase(ip)) {
+			ip = request.getRemoteAddr();
+		}
+		return ip;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/case
+	 *      http://localhost:8035/tactbase/test/case
+	 * 
+	 *      Note: this method will help us to test the case sensitive REST APIs
+	 */
+	//@formatter:on
+	@GetMapping(value = "/case")
+	public <T> T testCaseSensitive() {
+		return (T) RespUtil.successResponse();
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/php/test
+	 *      http://localhost:8035/tactbase/test/php/test
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/php/test")
+	public <T> T testPHP() {
+		MultiValueMap<String, String> map = new LinkedMultiValueMap<String, String>();
+		map.add("user_id", "12");
+
+		String content = "empty";
+
+		try {
+			content = restClient.testGet(String.class);
+		} catch (Exception e) {
+			_log.error(" error : " + e.getMessage());
+		}
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("one", content);
+
+		return (T) RespUtil.successResponse(resultMap);
+	}
+	
+	/**
+	 * 
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/php/test
+	 *      http://localhost:8035/tactbase/test/rest/client
+	 */
+	@GetMapping(value = "/rest/client")
+	public <T> T testRestClient() {			
+		
+		String url = "http://devapi1.talentaccurate.com/test";
+
+		Object object = null;
+		try {
+			object = restClient.testGetJSONWithUrl(url, String.class);
+		} catch (Exception e) {
+			e.printStackTrace();
+			_log.error(" error : " + e.getMessage());
+		}
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("result", object);
+
+		return (T) RespUtil.successResponse(resultMap);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @return
+	 * 
+	 *         possible urls: /test/php/email
+	 *         http://localhost:8035/tactbase/test/php/email
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/php/email")
+	public <T> T testPHPEmail(
+			@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail) {
+		MultiValueMap<String, String> map = new LinkedMultiValueMap<String, String>();
+		map.add("user_id", "12");
+		map.add("email", toEmail);
+
+		String content = "empty";
+
+		try {
+			content = restClient.sendEmail(map, String.class);
+		} catch (Exception e) {
+			_log.error(" error : " + e.getMessage());
+		}
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("one", content);
+
+		return (T) RespUtil.successResponse(resultMap);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @return
+	 * 
+	 *         possible urls: /test/java/email
+	 *         http://localhost:8035/tactbase/test/java/email
+	 * 
+	 *         source:
+	 *         https://www.tutorialspoint.com/java/java_sending_email.htm
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/java/email")
+	public <T> T testJavaEmail(
+			@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail) {
+		// Sender's email ID needs to be mentioned
+		String from = "donotreply@talentaccurate.com";
+
+		// Assuming you are sending email from localhost
+		String host = "localhost";
+
+		// Get system properties
+		Properties properties = System.getProperties();
+
+		// Setup mail server
+		properties.setProperty("mail.smtp.host", host);
+
+		// Get the default Session object.
+		Session session = Session.getDefaultInstance(properties);
+
+		try {
+			// Create a default MimeMessage object.
+			MimeMessage message = new MimeMessage(session);
+
+			// Set From: header field of the header.
+			message.setFrom(new InternetAddress(from));
+
+			// Set To: header field of the header.
+			message.addRecipient(Message.RecipientType.TO, new InternetAddress(
+					toEmail));
+
+			// Set Subject: header field
+			message.setSubject("Congrats!!");
+
+			// Now set the actual message
+
+			StringBuilder sb = new StringBuilder();
+
+			sb.append("<table  border=\"0\" cellpadding=\"0\" cellspacing=\"0\" style=\"max-width:832px;width:700px;margin:48px auto;background:none\">");
+			sb.append("<tbody>");
+			sb.append("<tr> ");
+			sb.append("<td align=\"center\" valign=\"top\">");
+			sb.append("<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\"  style=\"color:#111111;font-family:Arial,sans-serif;font-size:100%;line-height:150%;margin:0;padding:0\">");
+			sb.append("<tbody>");
+			sb.append("<tr> ");
+			sb.append("<td  style=\"padding:30px 48px;background-color:#f5f7f9\">");
+			sb.append("<table border=\"0\" cellpadding=\"0\" cellspacing=\"0\" width=\"100%\"  style=\"color:#111111;font-family:Arial,sans-serif;font-size:100%;line-height:150%;margin:0;padding:0\">");
+			sb.append("<tbody>");
+			sb.append("<tr> ");
+			sb.append("<td align=\"left\" valign=\"center\" width=\"48%\"  style=\"padding-bottom:30px\">  </td>");
+			sb.append("<td align=\"left\" valign=\"center\" width=\"52%\"  style=\"padding-bottom:30px\"> <img src=\"http://talentaccurate.com/logo.png\" width=\"30px\" height=\"30px\" class=\"CToWUd\"> </td>");
+			sb.append("</tr> ");
+			sb.append("<tr> ");
+			sb.append("<td colspan=\"2\">");
+			sb.append("<div  style=\"width:540px;margin:0 32px 0 32px;text-align:left\">");
+			sb.append("<div  style=\"text-align:center;margin:0 0 30px 0;font-size:16px;line-height:1\">");
+			sb.append("Hi Raja, ");
+			sb.append("</div> ");
+			sb.append("<div  style=\"font-size:16px;margin:0 0 30px 0;line-height:24px\">");
+			sb.append("<p> Congratulations on joining TalentAccurate! </p> ");
+
+			sb.append("<p> Just <a href=\"\">click here</a> to confirm your registration.<br><br></p>");
+			sb.append("<p> Big thanks, <br>Team TalentAccurate </p> ");
+			sb.append("</div> ");
+			sb.append("</div> </td>");
+			sb.append("</tr> ");
+			sb.append("</tbody>");
+			sb.append("</table> </td>");
+			sb.append("</tr> ");
+			sb.append("<tr> ");
+			sb.append("<td  style=\"line-height:22px;padding-top:50px;text-align:center\">");
+			sb.append("</td> ");
+			sb.append("</tr> ");
+			sb.append("<tr> ");
+			sb.append("<td  style=\"color:#9daab3;font-size:14px;line-height:22px;text-align:center;padding-top:25px\">");
+			sb.append("<p>Thank you for using TalentAccurate. </p>");
+			sb.append("<p> If you need to talk to us, our good people at");
+			sb.append("<a href=\"mailto:info@talentaccurate.com\"  style=\"color:#9daab3\" target=\"_blank\">info@talentaccurate.com</a>");
+			sb.append("will help you along.");
+			sb.append("</p>			");
+			sb.append("<p>TalentAccurate is operated by TalentAccurate Inc., our address is 36, Brahms Ave., North York, Ontario, Canada</p>");
+			sb.append("</td> ");
+			sb.append("</tr> ");
+			sb.append("</tbody>");
+			sb.append("</table> </td>");
+			sb.append("</tr> ");
+			sb.append("</tbody>");
+			sb.append("</table>");
+
+			message.setContent(sb.toString(), "text/html"); // html content
+
+			// message.setText("plain text content"); // plain text
+
+			// Send message
+			Transport.send(message);
+			_log.info(" Sent message successfully to " + toEmail);
+		} catch (MessagingException mex) {
+			mex.printStackTrace();
+			return (T) RespUtil
+					.errorResponse(TactAPIResult.EMAIL_NOT_SENT_PROPERLY);
+		}
+
+		return (T) RespUtil.successResponse();
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @return
+	 * 
+	 *         possible urls: /test/java/velocity/email
+	 *         http://localhost:8035/tactbase/test/java/velocity/email
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/java/velocity/email")
+	public <T> T testVelocityTeamplate(
+			@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail) {
+		return emailService.testVelocityTemplate(toEmail);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param email
+	 * @return
+	 * 
+	 *         possible urls: /test/velocity
+	 *         http://localhost:8035/tactbase/test/velocity
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/velocity")
+	public <T> T testVelocityEngine(String email,
+			HttpServletRequest request, HttpServletResponse response) {
+		Map<String, Object> map = new LinkedHashMap<>();
+
+		Map<String, Object> model = new HashMap<String, Object>();
+		model.put("userid", "rajacsp");
+		model.put("password", "sss");
+		String env = request.getSession().getServletContext()
+				.getInitParameter("env");
+		model.put("tact_profile", env);
+		@SuppressWarnings("deprecation")
+		String text = VelocityEngineUtils.mergeTemplateIntoString(
+				velocityEngine, "newsletter.vm", "utf-8", model);
+
+		map.put("one", text);
+
+		return (T) RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 *         possible urls: /register/confirmation
+	 *         http://localhost:8035/tactbase/test/register/confirmation
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/register/confirmation")
+	public <T> T testRegistrationConfirmation(
+			HttpServletRequest request, HttpServletResponse response) {
+		Map<String, Object> map = new LinkedHashMap<>();
+
+		Map<String, Object> model = new HashMap<String, Object>();
+
+		String env = request.getSession().getServletContext()
+				.getInitParameter("env");
+		model.put("tact_profile", env);
+		model.put("token", "my_some_token");
+		@SuppressWarnings("deprecation")
+		String text = VelocityEngineUtils.mergeTemplateIntoString(
+				velocityEngine, "registration_confirmation.vm", "utf-8", model);
+
+		model.put("tact_profile", env);
+		map.put("one", text);
+
+		return (T) RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 *         possible urls: /test/read/env
+	 *         http://localhost:8035/tactbase/test/read/env
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/read/env")
+	public <T> T readENVFromWebXML(HttpServletRequest request,
+			HttpServletResponse response) {
+		String env = request.getSession().getServletContext()
+				.getInitParameter("env");
+
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("env", env);
+
+		return (T) RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param model
+	 * @return
+	 * 
+	 *         possible urls: /test/user/1001
+	 *         http://localhost:8035/tactbase/test/user/1001
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/user/{userid}")
+	public ModelAndView getUserProfilePublic(Model model) {
+		// TactResponse c = manager.getAllCandidates();
+
+		// model.addAttribute("candidates", c);
+
+		ModelAndView mv = new ModelAndView("user");
+
+		return mv;
+	}
+
+	@Value("${service.region}")
+	// this is not working due to misconfigured bean
+	private String serviceRegion;
+
+	public final static String service_region = PropertyUtilTact
+			.getEnvironmentProperties(GatewayConst.PROP_SERVICE_REGION);
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 *         possible urls: /test http://localhost:8035/tactbase/test
+	 * 
+	 */
+	//@formatter:on
+	@CheckService(ServiceType.COACH_API)
+	@GetMapping(value = "/get/property")
+	public <T> T getProperty(HttpServletRequest request,
+			HttpServletResponse response) {
+
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("service_region_direct", serviceRegion);
+		map.put("service_region", service_region);
+
+		return (T) RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * 
+	 * @param token
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 *         possible urls: /test http://localhost:8035/tactbase/test/token
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/token")
+	@TokenRequired(value = { TokenType.PHP_API, TokenType.ZMC_API })
+	public <T> T testToken(HttpServletRequest request,
+			HttpServletResponse response) {
+
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("group", "");
+
+		return (T) RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 *         possible urls: /test/apikey
+	 *         http://localhost:8035/tactbase/test/apikey
+	 *         http://localhost:8035/tactbase
+	 *         /test/apikey?apikey=mf253757333f7b795a713c5e6m
+	 * 
+	 */
+	//@formatter:on
+	@APIKeyRequired(value = { KeyType.WEB_API, KeyType.MOBILE_API })
+	@GetMapping(value = "/apikey")
+	public <T> T testAPIKey(HttpServletRequest request,
+			HttpServletResponse response) {
+		_log.info("inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+
+		_log.info(" obj : " + resultMap);
+		return (T) resultMap;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param ip
+	 * @return
+	 * 
+	 *         possible urls: /test/ip/resolver tactbase/test/ip/resolver
+	 *         http://localhost:8035/tactbase/test/ip/resolver
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/ip/resolver")
+	public <T> T testIP(HttpServletRequest request,
+			HttpServletResponse response, @IpAddressArgument Long ip) {
+		_log.info(" inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("ip", ip);
+
+		_log.info(" obj : " + resultMap);
+		return (T) RespUtil.successResponse(resultMap);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param password
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/password/resolver
+	 *      tactbase/test/password/resolver
+	 *      http://localhost:8035/tactbase/test/password/resolver?password=0ec7ddb1df7b5e506ebd5a53d9d29707
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/password/resolver")
+	public <T> T testEncryptedPass(HttpServletRequest request,
+			HttpServletResponse response, @EncryptedPwdArgument String password) {
+		_log.info(" inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("ip", password);
+
+		_log.info(" obj : " + resultMap);
+		return (T) RespUtil.successResponse(resultMap);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param userid
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/userid/resolver
+	 *      tactbase/test/userid/resolver
+	 *      http://localhost:8035/tactbase/test/userid/resolver
+	 */
+	//@formatter:on
+	@GetMapping(value = "/userid/resolver")
+	public <T> T testDecryptedUserid(HttpServletRequest request,
+			HttpServletResponse response, @DecryptedUseridArgument String userid) {
+		_log.info(" inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();		
+		resultMap.put("userid", userid);
+
+		_log.info(" obj : " + resultMap);
+		return (T) RespUtil.successResponse(resultMap);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param userid
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws TactAuthException
+	 * 
+	 * possible urls: 
+	 * 		/test/encrypt/userid
+	 *      /tactbase/test/encrypt/userid
+	 *      http://localhost:8035/tactbase/test/encrypt/userid
+	 *  
+	 */
+	//@formatter:on
+	@GetMapping(value = "/encrypt/userid")
+	public <T> T encryptUserid(
+			@RequestParam(value = "userid", defaultValue = "1001") String userid,
+			HttpServletRequest request, HttpServletResponse response) throws TactAuthException {
+		
+		_log.info(" inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();		
+		resultMap.put("userid", userid);
+		resultMap.put("encrypted_userid", tactGeneralService.getRefCode(userid));
+
+		_log.info(" obj : " + resultMap);
+		return (T) RespUtil.successResponse(resultMap);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param password
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/enc/pass
+	 * 		/tactbase/test/enc/pass
+	 *      http://localhost:8035/tactbase/test/enc/pass
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/enc/pass")
+	public <T> T encPass(HttpServletRequest request,
+			HttpServletResponse response,
+			@CheckAndEncryptedPwdArgument String password) {
+		_log.info(" inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("ip", password);
+
+		_log.info(" obj : " + resultMap);
+		return (T) RespUtil.successResponse(resultMap);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param article
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/enc/pass
+	 * 		/tactbase/test/article_type/resolver
+	 *      http://localhost:8035/tactbase/test/article_type/resolver
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/article_type/resolver")
+	public <T> T getArticleType(HttpServletRequest request,
+			HttpServletResponse response,
+			@ArticleTypeArgument String article) {
+		_log.info(" inside");
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("ip", article);
+
+		_log.info(" obj : " + resultMap);
+		return (T) RespUtil.successResponse(resultMap);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param password
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/twitter 
+	 * 		/tactbase/test/twitter
+	 *      http://localhost:8035/tactbase/test/twitter
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/twitter")
+	public <T> T testTwitter(HttpServletRequest request,
+			HttpServletResponse response) {
+		_log.info(" inside");
+
+		socialFeedService.getTwitterFeeds();
+
+		Map<String, Object> resultMap = new LinkedHashMap<String, Object>();
+		resultMap.put("ok", "ok");
+		resultMap.put("ip", "");
+
+		_log.info(" obj : " + resultMap);
+		return (T) resultMap;
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param name
+	 * @param city
+	 * @param code
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/add/test 
+	 * 		/tactbase/test/add/test
+	 *      http://localhost:8035/tactbase/test/add/test
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/add/test")
+	public <T> T addTest(
+			@RequestParam(value = "name", defaultValue = "raj1") String name,
+			@RequestParam(value = "city", defaultValue = "chennai") String city,
+			@RequestParam(value = "code", defaultValue = "1") Integer code,
+			HttpServletRequest request, HttpServletResponse response) {
+		return testService.addTest(name, city, code);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param url
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls: 
+	 * 		/test/add/test 
+	 * 		/tactbase/test/get/stack/tags
+	 *      http://localhost:8035/tactbase/test/get/stack/tags
+	 * @throws IOException
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/stack/tags")
+	public <T> T getTags(
+			@RequestParam(value = "url", defaultValue = "https://api.stackexchange.com/2.2/questions/46475881?order=desc&sort=activity&site=stackoverflow") String url,
+			HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+		
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		map.put("url", url);
+
+		// Object content = restClient.getStackoverflowTags(url,
+		// StackQuestion.class);
+		// map.put("content", content);
+
+		ObjectMapper mapper = new ObjectMapper();
+		String json = Jsoup.connect(url).ignoreContentType(true).execute()
+				.body();
+		StackQuestion qs = mapper.readValue(json, StackQuestion.class);
+
+		return RespUtil.successResponse(qs);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/os
+	 * 		/tactbase/test/get/os
+	 *      http://localhost:8035/tactbase/test/get/os
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/os")
+	public <T> T getTags(HttpServletRequest request,
+			HttpServletResponse response) throws IOException {
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+
+		String json = Jsoup.connect("http://localhost:8035/tactbase/test/os")
+				.ignoreContentType(true).execute().body();
+		map.put("content", json);
+
+		ObjectMapper mapper = new ObjectMapper();
+		TactOS os = mapper.readValue(json, TactOS.class);
+		map.put("json", os);
+
+		return RespUtil.successResponse(map);
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param ip
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/location
+	 * 		/tactbase/test/get/location
+	 *  	http://localhost:8035/tactbase/test/get/location
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/location")
+	public <T> T getLocation(
+			@RequestParam(value = "ip", defaultValue = "69.58.106.196") String ip,
+			HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		String location = GeoLocationFinderTact.getCity(ip);
+		map.put("ip", ip);
+		map.put("location", location);
+
+		return RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/my/location
+	 * 		/tactbase/test/get/my/location
+	 *  	http://localhost:8035/tactbase/test/get/my/location
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/my/location")
+	public <T> T getMyLocation(			
+			@RequestParam(value = "ip", required = false) String ipLocal,
+			HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+		Map<String, Object> map = new LinkedHashMap<String, Object>();
+		
+		String ip = HttpRequestUtilTact.getRemoteAddr(request);
+		
+		if(ipLocal != null){
+			ip = ipLocal;
+		}
+		
+		Map<String, Object> ipMap = HttpRequestUtilTact.getRemoteIPDetails(request);
+		
+		Location location = GeoLocationFinderTact.getLocation(ip);
+		String city = GeoLocationFinderTact.getCity(ip);
+		String country = GeoLocationFinderTact.getCountry(ip);
+		
+		map.put("ip", ip);
+		map.put("ip_map", ipMap);
+		
+		map.put("location", location);
+		
+		if(location != null){
+			map.put("location_city", location.city);
+			map.put("location_country", location.countryName);
+		} else {
+			map.put("location_city", null);
+			map.put("location_country", null);
+		}
+		map.put("city", city);
+		map.put("country", country);
+
+		return RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/location
+	 * 		/tactbase/test/collect/indeed/jobs
+	 *  	http://localhost:8035/tactbase/test/collect/indeed/jobs
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/collect/indeed/jobs")
+	public <T> T collectIndeedJobs(			
+			HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+		
+		indeedJobReader.start(appSqlSession);
+		
+		Map<String, Object> map = new LinkedHashMap<String, Object>();				
+		map.put("test", "one");
+
+		return RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls: 
+	 * 		/test/get/location
+	 * 		/tactbase/test/collect/stack/key/count
+	 *  	http://localhost:8035/tactbase/test/collect/stack/key/count
+	 */
+	//@formatter:on
+	@GetMapping(value = "/collect/stack/key/count")
+	public <T> T collectStackKeyCount(			
+			HttpServletRequest request, HttpServletResponse response)
+			throws IOException {
+		
+		stackTagWeeklyAnalyzer.collectKeyQuestionCount(appSqlSession, StackKeyMeterScheduler.techKeysSet_1);
+		
+		Map<String, Object> map = new LinkedHashMap<String, Object>();				
+		map.put("test", "done");
+
+		return RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/la/report/email
+	 * 		/tactbase/test/la/report/email
+	 * 		http://localhost:8035/tactbase/test/la/report/email
+	 * 
+	 */
+	//@formatter:on
+	@Deprecated
+	@GetMapping(value = "/la/report/email")
+	public <T> T sendLATestEmailToUser(
+		@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+		@RequestParam(value = "referrer_id", defaultValue = "h03vac0fn1t34sgbi0kkks38d1") String referrerId,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");
+		
+		List<String> items = new LinkedList<>();
+		
+		Map<String, Object> reportMap = new LinkedHashMap<String, Object>();
+		
+		LocalDate now = new LocalDate();		
+		LocalDate lastMonday = now.minusDays(7);
+		LocalDate lastSunday = now.minusDays(1);
+		
+		int lastMondyInt = lastMonday.dayOfMonth().get();
+		int lastSundayInt = lastSunday.dayOfMonth().get();
+		String currentMonth = now.monthOfYear().getAsText();
+		
+		reportMap.put("start_date", currentMonth + " " +lastMondyInt);
+		reportMap.put("end_date", currentMonth + " " +lastSundayInt);		
+		
+		reportMap.put("productivity_percentile", RandomQwan.randBetween(20, 70));
+		reportMap.put("curiosity_percentile", RandomQwan.randBetween(20, 70));
+		reportMap.put("uniqueness_percentile", RandomQwan.randBetween(20, 70));
+		
+		return emailService.sendLAReortToUser(toEmail, env, referrerId, items, reportMap);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @param rockstarId
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/send/goal/tracker/report/email
+	 * 		/tactbase/test/send/goal/tracker/report/email
+	 * 		http://localhost:8035/tactbase/test/send/goal/tracker/report/email
+	 * 
+	 */
+	//@formatter:on
+	@Deprecated
+	@GetMapping(value = "/send/goal/tracker/report/email")
+	public <T> T sendGoalTracker(
+		@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+		@RequestParam(value = "rockstar_id", defaultValue = "1001") Long rockstarId,
+		@RequestParam(value = "goal", defaultValue = "learn ubunto") String goal,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");
+		
+		return emailService.sendEmailForGoalTracker(toEmail, rockstarId, goal, env);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @param rockstarId
+	 * @param projectId
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/send/project/validation/expert/email
+	 * 		/tactbase/test/send/project/validation/expert/email
+	 * 		http://localhost:8035/tactbase/test/send/project/validation/expert/email
+	 * 
+	 */
+	//@formatter:on
+	@Deprecated
+	@GetMapping(value = "/send/project/validation/expert/email")
+	public <T> T sendEmailValidationForProject(
+		@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+		@RequestParam(value = "rockstar_id", defaultValue = "1001") Long rockstarId,
+		@RequestParam(value = "projectid", defaultValue = "22") Long projectId,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");
+		
+		return emailService.sendEmailValidationForProject(toEmail, rockstarId, projectId, env);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/send/test/email
+	 * 		/tactbase/test/send/test/email
+	 * 		http://localhost:8035/tactbase/test/send/test/email
+	 */
+	//@formatter:on
+	@GetMapping(value = "/send/test/email")
+	public <T> T sendTestEmail(
+		@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");		
+		return emailService.sendTestEmail(toEmail, env);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @param rockstarId
+	 * @param challengeId
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/send/challenge/inprogress/email
+	 * 		/tactbase/test/send/challenge/inprogress/email
+	 * 		http://localhost:8035/tactbase/test/send/challenge/inprogress/email
+	 * 
+	 */
+	//@formatter:on
+	@Deprecated
+	@GetMapping(value = "/send/challenge/inprogress/email")
+	public <T> T sendEmailForInprogressProject(
+		@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+		@RequestParam(value = "rockstar_id", defaultValue = "1001") Long rockstarId,
+		@RequestParam(value = "challenge_id", defaultValue = "9") Long challengeId,
+		@RequestParam(value = "url", defaultValue = "break-memcached-in-java") String url,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");
+		
+		return emailService.sendEmailForInprogressProject(toEmail, rockstarId, challengeId, url, env);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param toEmail
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/java/velocity/email/to/company/json
+	 * 		/tactbase/test/java/velocity/email/to/company/json
+	 * 		http://localhost:8035/tactbase/test/java/velocity/email/to/company/json
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/java/velocity/email/to/company/json")
+	public <T> T testEmailToCompany(
+			@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+			HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");
+		
+		List<String> items = new LinkedList<>();
+		
+		Map<String, Object> reportMap = new LinkedHashMap<String, Object>();		
+		
+		reportMap.put("use1_name","Nirosha");
+		reportMap.put("user1_url","http://www.talentaccurate.com/rockstar/1111");
+		reportMap.put("user1_feedback","http://www.talentaccurate.com/settings");
+		reportMap.put("use2_name","Niroshajey");
+		reportMap.put("user2_url","http://www.talentaccurate.com/rockstar/1001");
+		reportMap.put("user2_feedback","http://www.talentaccurate.com/settings");
+	
+		return emailService.testEmailToCompany(toEmail, env, items, reportMap);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param id
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/java/velocity/email/to/company/json
+	 * 		/tactbase/test/java/velocity/email/to/company/json
+	 * 		http://localhost:8035/tactbase/test/java/velocity/email/to/company/json
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/employee/{rockstarId}/feedback/details")
+	//@RequestParam(value = "name") String name){
+	public <T> T feedbackDetail(@PathVariable("rockstarId") Long id){
+
+		return (T) testService.feedbackDetail(id);
+	}
+
+	//@formatter:off
+	/**
+	 * testEmail
+	 * @param toEmail
+	 * @param referrerId
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/weekly/report/email
+	 * 		/tactbase/test/weekly/report/email
+	 * 		http://localhost:8035/tactbase/test/weekly/report/email
+	 */
+	//@formatter:on
+	@GetMapping(value = "/weekly/report/email")
+	public <T> T sendWeeklyReortToUser(
+		@RequestParam(value = "to", defaultValue = "raja.r.csp@gmail.com") String toEmail,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");
+		
+		return tactGeneralService.sendWeeklyReportToUser(toEmail, env);
+	}	
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/weekly/career/prediction/email
+	 * 		/tactbase/test/weekly/career/prediction/email
+	 * 		http://localhost:8035/tactbase/test/weekly/career/prediction/email
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/weekly/career/prediction/email")
+	public <T> T sendWeeklyCareerPredictionToUsers(		
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");		
+		return tactGeneralService.sendWeeklyCareerPredictionToUsers(env);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param link
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/linkedin/profile
+	 * 		/tactbase/test/linkedin/profile
+	 * 		http://localhost:8035/tactbase/linkedin/profile
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/linkedin/profile")
+	public <T> T testPublicDB(
+			@RequestParam(value = "link", defaultValue = "raja.r.csp@gmail.com") String link,
+			HttpServletRequest request, HttpServletResponse response) {
+		
+		RegionCoachMapper coachMapper = publicSqlSession.getMapper(RegionCoachMapper.class);
+		Map<String, Object> resultMap = coachMapper.getPublicProfileByLink(link);
+		
+		return RespUtil.successResponse(resultMap);
+		
+		// test comment 1
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls:
+	 * 		/test/image
+	 * 		/tactbase/test/image
+	 * 		http://localhost:8035/tactbase/test/image
+	 * 
+	 * source:
+	 * 		http://www.baeldung.com/spring-controller-return-image-file
+	 * 
+	 * Media type:
+	 * 		MediaType.IMAGE_GIF_VALUE - only for GIF
+	 * 		MediaType.APPLICATION_OCTET_STREAM_VALUE  - any resource
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/image", produces = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+	public byte[] getImage(HttpServletRequest request) throws IOException {
+		
+		if(TactWebUtil.isAPIRequest(request.getRequestURI())){
+			String ip = TactWebUtil.getIP(request);
+			_log.info(" ip["+ip+"]");
+		}
+		
+	    InputStream in = getClass()
+	      .getResourceAsStream("/org/qwan/tact/images/one.gif");
+	    return IOUtils.toByteArray(in);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/sql/backup
+	 * 		/tactbase/test/sql/backup
+	 * 		http://localhost:8035/tactbase/test/sql/backup
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/sql/backup")
+	public <T> T testSQLBackup(			
+			HttpServletRequest request, HttpServletResponse response) {
+		
+		return tactGeneralService.runSQLBackup();		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param reason
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/enum/test
+	 * 		/tactbase/test/enum/test
+	 * 		http://localhost:8035/tactbase/test/enum/test
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/enum/test")
+	public <T> T testEnum(			
+			@RequestParam(value = "tval") LoginErrorReason reason,
+			HttpServletRequest request, 
+			HttpServletResponse response) {
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("tval", reason);
+		
+		if(reason == LoginErrorReason.SUCCESS){
+			map.put("result", "Success");
+		} else if(reason == LoginErrorReason.IP_MISMATCH){
+			map.put("result", "IP Mismatch");
+		} else if(reason == LoginErrorReason.NOT_AUTHORIZED){
+			map.put("result", "Not Authorized");
+		} else if(reason == LoginErrorReason.SESSION_EXPIRED){
+			map.put("result", "Session Expired");
+		} else if(reason == LoginErrorReason.DAMAGED_COOKIE){
+			map.put("result", "Damaged Cookie");
+		} else if(reason == LoginErrorReason.GENERAL_ERROR){
+			map.put("result", "General Error");
+		}
+		
+		return RespUtil.successResponse(map);		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param reason
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/enum/test1
+	 * 		/tactbase/test/enum/test1
+	 * 		http://localhost:8035/tactbase/test/enum/test1
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/enum/test1")
+	public <T> T testEnum1(			
+			@RequestParam(value = "tval") Gender gender,
+			HttpServletRequest request, 
+			HttpServletResponse response) {
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("tval", gender);
+		
+		if(gender == Gender.MALE){
+			map.put("result", "Guy");
+		} else if(gender == Gender.FEMALE){
+			map.put("result", "Girl");
+		} else if(gender == Gender.UNKNOWN){
+			map.put("result", "Unknown");
+		}
+		
+		return RespUtil.successResponse(map);		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/get/la/emails
+	 * 		/tactbase/test/get/la/emails
+	 * 		http://localhost:8035/tactbase/test/get/la/emails
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/la/emails")
+	public <T> T getLAEmail(
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		return tactGeneralService.getLAEmails();		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/add/la/analytics/report
+	 * 		/tactbase/test/add/la/analytics/report
+	 * 		http://localhost:8035/tactbase/test/add/la/analytics/report
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/add/la/analytics/report")
+	public <T> T addLearningAnalyticsWeeklyReport(
+		@RequestParam(value = "days_before", defaultValue="7") Integer daysBefore,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		return tactGeneralService.addLearningAnalyticsWeeklyReport(daysBefore);		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/send/la/weekly/report/email
+	 * 		/tactbase/test/send/la/weekly/report/email
+	 * 		http://localhost:8035/tactbase/test/send/la/weekly/report/email
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/send/la/weekly/report/email")
+	public <T> T sendLAWeeklyReportToUser(
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		return tactGeneralService.sendLAWeeklyReportToUser();		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param counter
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/counter/test
+	 * 		/tactbase/test/counter/test
+	 * 		http://localhost:8035/tactbase/test/counter/test
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/counter/test")
+	public <T> T exceptionTest(
+		@RequestParam(value = "counter") Integer counter,
+		HttpServletRequest request, HttpServletResponse response) {
+		
+		Map<String, Object> rMap = new LinkedHashMap<String, Object>();
+		rMap.put("result", counter * 2);
+		
+		return (T) rMap;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param allRequestParams
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/dummy/get
+	 * 		/tactbase/test/dummy/get
+	 * 		http://localhost:8035/tactbase/test/dummy/get
+	 */
+	//@formatter:on
+	@GetMapping(value = "/dummy/get")
+	public <T> T dummyGET(
+			@RequestParam Map<String,String> allRequestParams,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" params : "+allRequestParams);
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("params", allRequestParams);
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param allRequestParams
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/dummy/post
+	 * 		/tactbase/test/dummy/post
+	 * 		http://localhost:8035/tactbase/test/dummy/post
+	 * 
+	 */
+	//@formatter:on
+	@RequestMapping(value = "/dummy/post", method = {RequestMethod.POST, RequestMethod.GET })
+	public <T> T dummyPOST(
+			@RequestParam Map<String,String> allRequestParams,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" params : "+allRequestParams);
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("params", allRequestParams);
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param allRequestParams
+	 * @param json
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/dummy/json
+	 * 		/tactbase/test/dummy/json
+	 * 		http://localhost:8035/tactbase/test/dummy/json
+	 * 
+	 */
+	//@formatter:on
+	@RequestMapping(value = "/dummy/json", method = {RequestMethod.GET, RequestMethod.POST}, consumes="application/json")
+	public <T> T dummyJSON(
+			@RequestParam Map<String,String> allRequestParams,
+			@RequestBody Object json,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" json : "+json);
+
+		return (T) RespUtil.successResponse(json);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param content
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws TactAuthException
+	 * 
+	 * possible urls:
+	 * 		/test/encr
+	 * 		/tactbase/test/encr
+	 * 		http://localhost:8035/tactbase/test/encr
+	 * 
+	 */	
+	//@formatter:on
+	@GetMapping(value = "/encr")
+	public <T> T testEncryption(
+			@RequestParam(value = "content") String content,
+			HttpServletRequest request,
+			HttpServletResponse response) throws TactAuthException {
+		
+		_log.info(" content : "+content);
+		
+		String encrypted = TactUtil.encrypt(content);
+		String decrypted = TactUtil.decrypt(encrypted);
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("content", content);
+		map.put("encrypted", encrypted);
+		map.put("decrypted", decrypted);
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param string
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws TactAuthException
+	 * 
+	 * possible urls:
+	 * 		/test/weekly/kpi/to/admin
+	 * 		/tactbase/test/weekly/kpi/to/admin
+	 * 		http://localhost:8035/tactbase/test/weekly/kpi/to/admin
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/weekly/kpi/to/admin")
+	public <T> T testSendWeeklyKPIToAdminGroup(		
+			@RequestParam(value = "email", defaultValue = "raja.r.csp@gmail.com") String emails,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		
+		String env = request.getSession().getServletContext().getInitParameter("env");		
+		return tactGeneralService.sendWeeklyKPIToAdminGroup(env, emails);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/daily/kpi/to/admin
+	 * 		/tactbase/test/daily/kpi/to/admin
+	 * 		http://localhost:8035/tactbase/test/daily/kpi/to/admin
+	 * 		http://devapi.talentaccurate.com/test/daily/kpi/to/admin
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/daily/kpi/to/admin")
+	public <T> T sendDailyKPIToAdminGroup(
+			@RequestParam(value = "email", defaultValue = "raja.r.csp@gmail.com") String emails,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		return tactGeneralService.sendDailyKPIToAdminGroup("dev", emails);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/view/archive
+	 * 		/tactbase/test/view/archive
+	 * 		http://localhost:8035/tactbase/test/view/archive
+	 * 
+	 */
+	//@formatter:on
+	@ViewArchive()
+	@GetMapping(value = "/view/archive")
+	public <T> T testViewArchive(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		return (T) RespUtil.successResponse();
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/attempt
+	 * 		/tactbase/test/attempt
+	 * 		http://localhost:8035/tactbase/test/attempt
+	 * 
+	 */
+	//@formatter:on
+	@AttemptCounter()
+	@GetMapping(value = "/attempt")
+	public <T> T testAttempt(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		return (T) RespUtil.successResponse();
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/attempt1
+	 * 		/tactbase/test/attempt1
+	 * 		http://localhost:8035/tactbase/test/attempt1
+	 * 
+	 */
+	//@formatter:on
+	@AttemptCounter()
+	@GetMapping(value = "/attempt1")
+	public <T> T testAttempt1(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		return (T) RespUtil.successResponse();
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/current/week/ad/json
+	 * 		/tactbase/test/current/week/ad/json
+	 * 		http://localhost:8035/tactbase/test/current/week/ad/json
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/current/week/ad/json")
+	public <T> T currentWeekAD(
+			HttpServletRequest request,
+			HttpServletResponse response) {		
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("current_week", TactDateTimeUtil.getCurrentWeekAD());
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/last/week/ad/json
+	 * 		/tactbase/test/last/week/ad/json
+	 * 		http://localhost:8035/tactbase/test/last/week/ad/json
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/last/week/ad/json")
+	public <T> T laseWeekAD(
+			HttpServletRequest request,
+			HttpServletResponse response) {		
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("last_week", TactDateTimeUtil.getCurrentWeekAD()-1);
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param password
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws Exception
+	 * 
+	 * possible urls:
+	 * 		/test/enc/pass/json
+	 * 		/tactbase/test/enc/pass/json
+	 * 		http://localhost:8035/tactbase/test/enc/pass/json
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/enc/pass/json")
+	public <T> T encryptPass(
+			@RequestParam(value = "password") String password,
+			HttpServletRequest request,
+			HttpServletResponse response) throws Exception {
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("password", password);
+		map.put("encrypted", authSpecialTact.encrypt(password));
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param content
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws Exception
+	 * 
+	 * possible urls:
+	 * 		/test/character/encoding/json
+	 * 		/tactbase/test/character/encoding/json
+	 * 		http://localhost:8035/tactbase/test/character/encoding/json
+	 */
+	//@formatter:on
+	@RequestMapping(value = "/character/encoding/json", method = {RequestMethod.POST, RequestMethod.GET })
+	public <T> T testCharacterEncoding(
+			@RequestParam(value = "content") String content,
+			HttpServletRequest request,
+			HttpServletResponse response) throws Exception {
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("content", content);
+		
+		String newContent = content.replaceAll("[^\\x00-\\x7F]", "");
+		map.put("new_content", newContent);
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/log/execution/time
+	 * 		/tactbase/test/log/execution/time
+	 * 		http://localhost:8035/tactbase/test/log/execution/time
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/log/execution/time")
+	public <T> T testLongExecutionTime(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		return tactGeneralService.testLogExecutionTime();
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/time
+	 * 		/tactbase/test/time
+	 * 		http://localhost:8035/tactbase/test/time
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/time")
+	public <T> T getTime(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		return tactGeneralService.testLogExecutionTime();
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/la/scatterplot/data/json
+	 * 		/tactbase/test/la/scatterplot/data/json
+	 * 		http://localhost:8035/tactbase/test/la/scatterplot/data/json
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/la/scatterplot/data/json")
+	public <T> T testLAScatterPlotData(
+			@RequestParam(value = "max", defaultValue = "10") Integer max,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		_log.info(" reached ");
+		
+		List<Object> scatterDataList = new LinkedList<Object>();
+		
+		for(int i=0;i<max;i++){
+			List<Object> scatterInnerDataList = new LinkedList<Object>();
+			
+			int techFrequency = RandomQwan.randBetween(21000, 99999);	
+			
+			int freqBase = techFrequency / 1000;
+			int freqPoint = techFrequency % 1000;
+			
+			_log.info(" "+techFrequency+" - "+freqBase+" - "+freqPoint+" ");
+			
+			scatterInnerDataList.add(freqBase);
+			scatterInnerDataList.add(freqPoint);
+			
+			scatterDataList.add(scatterInnerDataList);
+		}
+		
+		return (T) RespUtil.successResponse(scatterDataList);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/get/weekly/leader/board
+	 * 		/tactbase/test/get/weekly/leader/board
+	 * 		http://localhost:8035/tactbase/test/get/weekly/leader/board
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/weekly/leader/board")
+	public <T> T getWeeklyLeaderBoard(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		return tactGeneralService.calculateWeeklyLeaderboard();
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param uploadfile
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/upload
+	 * 		/tactbase/test/upload
+	 * 		http://localhost:8035/tactbase/test/upload
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/upload")
+	public <T> T upload(	
+			@RequestParam("file") MultipartFile uploadfile,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		return tactGeneralService.uploadFile(uploadfile);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/reverse/date
+	 * 		/tactbase/test/reverse/date
+	 * 		http://localhost:8035/tactbase/test/reverse/date
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/reverse/date")
+	public <T> T reverseDate(
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		List<Map<String, Object>> list = new LinkedList<Map<String, Object>>();
+		
+		long DAY_IN_MS = 1000 * 60 * 60 * 24;
+		Date one = new Date(System.currentTimeMillis() - (2 * DAY_IN_MS));		
+		Date two = new Date(System.currentTimeMillis() - (17 * DAY_IN_MS));
+		Date three = new Date(System.currentTimeMillis() - (5 * DAY_IN_MS));
+		
+		//Map<String, Object> map = new LinkedHashMap<String, Object>();
+		Map<String, Object> subMap = new LinkedHashMap<String, Object>();
+		subMap.put("updated_date", one);
+		subMap.put("content", "one");
+		list.add(subMap);		
+		
+		Map<String, Object> subMap1 = new LinkedHashMap<String, Object>();
+		subMap1.put("updated_date", two);
+		subMap1.put("content", "two");
+		list.add(subMap1);		
+		
+		Map<String, Object> subMap2 = new LinkedHashMap<String, Object>();
+		subMap2.put("updated_date", three);
+		subMap2.put("content", "three");
+		list.add(subMap2);
+		
+		Collections.sort(list, mapComparatorUDateReverse);
+		
+		return (T) RespUtil.successResponse(list);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * source:
+	 * 		https://stackoverflow.com/questions/5155952/sorting-a-list-of-mapstring-string
+	 */
+	//@formatter:on
+	public Comparator<Map<String, Object>> mapComparatorUDateReverse = new Comparator<Map<String, Object>>() {
+	    public int compare(Map<String, Object> first, Map<String, Object> second) {
+	        return ((Date) second.get("updated_date")).compareTo((Date) first.get("updated_date"));
+	    }
+	};	
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls:
+	 * 		/test/pdf
+	 * 		/tactbase/test/pdf
+	 * 		http://localhost:8035/tactbase/test/pdf
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/pdf", produces = "application/pdf")
+	public ResponseEntity<byte[]> testPDF(
+			HttpServletRequest request,
+			HttpServletResponse response) throws IOException {
+		
+		byte[] contents = FileUtil.loadFile("D:/csp/space/test.pdf");
+
+		HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.parseMediaType("application/pdf"));
+	    String filename = "output.pdf";
+	    headers.setContentDispositionFormData(filename, filename);
+	    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
+	    ResponseEntity<byte[]> response1 = new ResponseEntity<byte[]>(contents, headers, HttpStatus.OK);
+	    return response1;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * possible urls:
+	 * 		/test/pdf1
+	 * 		/tactbase/test/pdf1
+	 * 		http://localhost:8035/tactbase/test/pdf1
+	 * 
+	 * source:
+	 * 		https://stackoverflow.com/questions/11897290/how-to-convert-itextpdf-document-to-byte-array
+	 * @throws DocumentException 
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/pdf1", produces = "application/pdf")
+	public ResponseEntity<byte[]> testPDF1(
+			HttpServletRequest request,
+			HttpServletResponse response) throws IOException, DocumentException {
+		
+		byte[] contents = PDFUtil.getSamplePDFContent();
+		
+		HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.parseMediaType("application/pdf"));
+	    String filename = "output.pdf";
+	    headers.setContentDispositionFormData(filename, filename);
+	    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
+	    ResponseEntity<byte[]> response1 = new ResponseEntity<byte[]>(contents, headers, HttpStatus.OK);
+	    return response1;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * @throws DocumentException
+	 * 
+	 * possible urls:
+	 * 		/test/pdf1
+	 * 		/tactbase/test/pdf1
+	 * 		http://localhost:8035/tactbase/test/pdf2
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/pdf2", produces = "application/pdf")
+	public ResponseEntity<byte[]> testPDF2(
+			HttpServletRequest request,
+			HttpServletResponse response) throws IOException, DocumentException {
+		
+		byte[] contents = PDFUtil.getSamplePDFContentRockstar();
+		
+		HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.parseMediaType("application/pdf"));
+	    String filename = "output.pdf";
+	    headers.setContentDispositionFormData(filename, filename);
+	    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
+	    ResponseEntity<byte[]> response1 = new ResponseEntity<byte[]>(contents, headers, HttpStatus.OK);
+	    return response1;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * @throws DocumentException
+	 * 
+	 * possible urls:
+	 * 		/test/rockstar/pdf
+	 * 		/tactbase/test/rockstar/pdf
+	 * 		http://localhost:8035/tactbase/test/rockstar/pdf
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/rockstar/pdf", produces = "application/pdf")
+	public ResponseEntity<byte[]> testRockstarPDF(
+			HttpServletRequest request,
+			HttpServletResponse response) throws IOException, DocumentException {
+		
+		byte[] contents = PDFUtil.getSampleRockstar();
+		
+		HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.parseMediaType("application/pdf"));
+	    String filename = "rockstar_"+RandomQwan.randBetween(0, 1000)+".pdf";
+	    headers.setContentDispositionFormData(filename, filename);
+	    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
+	    ResponseEntity<byte[]> response1 = new ResponseEntity<byte[]>(contents, headers, HttpStatus.OK);
+	    return response1;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * @throws IOException
+	 * 
+	 * 
+	 * possible urls:
+	 * 		/test/excel
+	 * 		/tactbase/test/excel
+	 * 		http://localhost:8035/tactbase/test/excel
+	 * 
+	 * 
+	 * source:
+	 * 		https://stackoverflow.com/questions/974079/setting-mime-type-for-excel-document
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/excel", produces = "application/vnd.ms-excel")
+	public ResponseEntity<byte[]> testExcel(
+			HttpServletRequest request,
+			HttpServletResponse response) throws IOException {		
+		
+		byte[] contents = ExcelUtil.getSampleExcel();				
+
+		HttpHeaders headers = new HttpHeaders();
+	    headers.setContentType(MediaType.parseMediaType("application/vnd.ms-excel"));
+	    String filename = "output_"+RandomQwan.rand(1000)+".xlsx";
+	    headers.setContentDispositionFormData(filename, filename);
+	    headers.setCacheControl("must-revalidate, post-check=0, pre-check=0");
+	    ResponseEntity<byte[]> response1 = new ResponseEntity<byte[]>(contents, headers, HttpStatus.OK);
+	    return response1;
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param sum
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/paypal/pay
+	 * 		/tactbase/test/paypal/pay
+	 * 		http://localhost:8035/tactbase/test/paypal/pay
+	 * 
+	 * source:
+	 * 		https://medium.com/oril/spring-boot-paypal-angular-2-9ca70d940e5f
+	 */
+	//@formatter:on
+	@RequestMapping(value = "/paypal/pay", method = {RequestMethod.POST, RequestMethod.GET })
+	public <T> T makePaypalPayment(	
+			@RequestParam("sum") String sum,
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		return tactGeneralService.makePaypalPayment(sum);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/paypal/complete
+	 * 		/tactbase/test/paypal/complete
+	 * 		http://localhost:8035/tactbase/test/paypal/complete
+	 * 
+	 * source:
+	 * 		https://medium.com/oril/spring-boot-paypal-angular-2-9ca70d940e5f
+	 * 
+	 */
+	//@formatter:on
+	@RequestMapping(value = "/paypal/complete", method = {RequestMethod.POST, RequestMethod.GET })
+	public <T> T completePaypalPayment(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		return tactGeneralService.completePayment(request);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/base
+	 * 		/tactbase/test/base
+	 * 		http://localhost:8035/tactbase/test/base
+	 */
+	//@formatter:on
+	//@MentorLoginRequired()
+	@GetMapping(value = "/base")
+	public <T> T createBase(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		Map<String, Object> map = new LinkedHashMap<>();
+		map.put("city", "chennai");
+		map.put("language", "tamil");
+		map.put("version", "1.3");
+
+		return (T) RespUtil.successResponse(map);
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/get/all/test/entries
+	 * 		/tactbase/test/get/all/test/entries
+	 * 		http://localhost:8035/tactbase/test/get/all/test/entries
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/all/test/entries")
+	public <T> T getAllTestEntries(			
+			HttpServletRequest request,
+			HttpServletResponse response) {
+		
+		return (T) testService.getAllTestEntries();		
+	}
+
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param id
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/get/test/by/id
+	 * 		/tactbase/test/get/test/by/id
+	 * 		http://localhost:8035/tactbase/test/get/test/by/id
+	 * 
+	 */
+	//@formatter:on
+	@GetMapping(value = "/get/test/by/id")
+	public <T> T getAllTestEntries(			
+			HttpServletRequest request,
+			HttpServletResponse response,
+			@RequestParam("id") Integer id) {		
+		return (T) testService.getTestById(id);		
+	}
+	
+	//@formatter:off
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param id
+	 * @param city
+	 * @param name
+	 * @param code
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/update/test/by/id
+	 * 		/tactbase/test/update/test/by/id
+	 * 		http://localhost:8035/tactbase/test/update/test/by/id
+	 */
+	//@formatter:on
+	@GetMapping(value = "/update/test/by/id")
+	public <T> T updateTestById(			
+			HttpServletRequest request,
+			HttpServletResponse response,
+			@RequestParam("id") Integer id,
+			@RequestParam("city") String city,
+			@RequestParam("name") String name,
+			@RequestParam("code") Integer code
+			) {		
+		return (T) testService.updateTestById(id, name, city, code);		
+	}
+	
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param content
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/medium/content
+	 * 		/tactbase/test/medium/content
+	 * 		http://localhost:8035/tactbase/test/medium/content
+	 */
+	@PostMapping(value = "/medium/content")
+	public <T> T testMediumContent(			
+			HttpServletRequest request,
+			HttpServletResponse response,
+			
+			@RequestParam("content") String content
+			
+			) {		
+		return (T) testService.testMediumContent(content);		
+	}
+	
+	/**
+	 * 
+	 * @param request
+	 * @param response
+	 * @param content
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/froala/content
+	 * 		/tactbase/test/froala/content
+	 * 		http://localhost:8035/tactbase/test/froala/content
+	 */
+	@PostMapping(value = "/froala/content")
+	public <T> T testFroalaContent(			
+			HttpServletRequest request,
+			HttpServletResponse response,
+			
+			@RequestParam("content") String content
+			
+			) {		
+		return (T) testService.testFroalaContent(content);		
+	}
+	
+	/**
+	 * 
+	 * @param content
+	 * @return
+	 * 
+	 * possible urls:
+	 * 		/test/add/market/general/prediction/json
+	 * 		/tactbase/test/add/market/general/prediction/json
+	 * 		http://localhost:8035/tactbase/test/add/market/general/prediction/json
+	 */
+	@PostMapping(value = {"/add/market/general/prediction/json"})
+	public  <T> T addGeneralMarketPrediction(
+	    @RequestParam(value="content") String content
+	)
+	{				
+		return tactRegionCoachService.addMarketGeneralPrediction(content);
+	}
+}
